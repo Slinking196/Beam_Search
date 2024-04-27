@@ -1,7 +1,20 @@
 import numpy as np
-from CPMP.cpmp_ml import generate_data, Layout
+from CPMP.cpmp_ml import generate_random_layout, Layout
 from keras.models import Model
+from keras.layers import Input, Dense, Flatten
 from copy import deepcopy
+
+def get_ann_state(layout: Layout) -> np.ndarray:
+    S=len(layout.stacks) # Cantidad de stacks
+
+    #matriz de stacks
+    b = 2. * np.ones([S,layout.H + 1]) # Matriz normalizada
+    for i,j in enumerate(layout.stacks):
+        b[i][layout.H-len(j) + 1:] = [k/layout.total_elements for k in j]
+        b[i][0] = layout.is_sorted_stack(i)
+    b.shape=(S,(layout.H + 1))
+    
+    return np.stack(b)
 
 def init_session(lays: list[Layout]) -> list[tuple]:
     lays_size = len(lays)
@@ -41,7 +54,7 @@ def verify_solution(lays: list[tuple], solutions: dict) -> dict:
     return new_lays, solutions
 
 def get_model_lays(lays: list[tuple]) -> list:
-    model_lays = [lay[0] for lay in lays]
+    model_lays = [get_ann_state(lay[0]) for lay in lays]
 
     return np.stack(model_lays)
 
@@ -65,7 +78,37 @@ def expanded_lays(model: Model, lays: list[tuple]):
     
     return child_lays, pred_lays
 
+def get_dimensions(lst: list) -> list:
+    dimensions = []
 
+    while isinstance(lst, list):  # Mientras el elemento sea una lista
+        dimensions.append(len(lst))  # Agregar la longitud de la lista actual a las dimensiones
+        if len(lst) == 0:
+            # Si la lista está vacía, detener el bucle
+            break
+        lst = lst[0]  # Continuar con el primer elemento para revisar más niveles de anidamiento
+    
+    return dimensions 
+
+def best_moves(lays: list[tuple], pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
+    cases = len(pred_lays)
+    new_lays = []
+    new_pred = []
+
+    cont = 0
+    for k in range(cases):
+        pred_size = pred_lays[k].shape[0]
+        temp_w = 0
+
+        for i in range(pred_size):
+            if pred_lays[k][i] >= threshold and temp_w < w:
+                new_lays.append(lays[cont])
+                new_pred.append(pred_lays[k][i])
+                temp_w += 1
+
+            cont += 1
+
+    return new_lays, new_pred
 
 def beam_search(model: Model, lays: list[Layout] = None, H: int = 5, 
                 w: int = 3 , threshold: float = 0.01) -> list:
@@ -73,9 +116,23 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
     session_lays = init_session(lays)
     solutions = dict()
     
+    session_lays, solutions = verify_solution(session_lays, solutions)
+    if len(session_lays) == 0: return solutions
+
     while True:
-        session_lays, solutions = verify_solution(session_lays, solutions)
-        if len(session_lays) == 0: return solutions
 
         child_lays, pred_lays = expanded_lays(model, session_lays)
+        session_lays, pred_lays = best_moves(session_lays, pred_lays, w, threshold)
+
+    return solutions
+    
+input_model = Input(shape= (5, 6))
+dense_1 = Dense(6)(input_model)
+dense_2 = Dense(6)(dense_1)
+flatten = Flatten()(dense_2)
+dense_3 = Dense(20, activation= 'sigmoid')(flatten)
+
+model = Model(inputs= input_model, outputs= dense_3)
+
+beam_search(model, [generate_random_layout(5, 5, 15), generate_random_layout(5, 5, 15)])
         
