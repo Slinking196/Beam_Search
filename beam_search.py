@@ -81,8 +81,12 @@ def expanded_lays(model: Model, lays: list[tuple]):
 def get_dimensions(lst: list) -> list:
     dimensions = []
 
-    while isinstance(lst, list):  # Mientras el elemento sea una lista
-        dimensions.append(len(lst))  # Agregar la longitud de la lista actual a las dimensiones
+    while isinstance(lst, list) or isinstance(lst, np.ndarray):  # Mientras el elemento sea una lista
+        if isinstance(lst, list): dimensions.append(len(lst))
+        elif isinstance(lst, np.ndarray):  # Agregar la longitud de la lista actual a las dimensiones
+            lst = lst.tolist()
+            dimensions.append(len(lst))
+
         if len(lst) == 0:
             # Si la lista está vacía, detener el bucle
             break
@@ -110,6 +114,19 @@ def best_moves(lays: list[tuple], pred_lays: list[np.ndarray], w: int, threshold
 
     return new_lays, new_pred
 
+def multiply_predictions(pred_lays: list[np.ndarray], pred_child_lays: list[np.ndarray]) -> list[np.ndarray]:
+    pred_lays_size = len(pred_lays)
+    multiply_pred = []
+
+    j = 0
+    for k in range(pred_lays_size):
+        stack_size = pred_lays[0].shape[0]
+        
+        for i in range(stack_size):
+            multiply_pred.append(pred_child_lays[j] * pred_lays[k][i])
+    
+    return multiply_pred
+
 def beam_search(model: Model, lays: list[Layout] = None, H: int = 5, 
                 w: int = 3 , threshold: float = 0.01) -> list:
     
@@ -118,11 +135,17 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
     
     session_lays, solutions = verify_solution(session_lays, solutions)
     if len(session_lays) == 0: return solutions
+    
+    session_lays, pred_lays = expanded_lays(model, session_lays)
 
     while True:
+        session_lays, solutions = verify_solution(session_lays, solutions)
+        if len(session_lays) == 0: return solutions
 
-        child_lays, pred_lays = expanded_lays(model, session_lays)
-        session_lays, pred_lays = best_moves(session_lays, pred_lays, w, threshold)
+        child_lays, pred_child_lays = expanded_lays(model, session_lays)
+        multiply_pred = multiply_predictions(pred_lays, pred_child_lays)
+        
+        session_lays, pred_lays = best_moves(child_lays, multiply_pred, w, threshold)
 
     return solutions
     
