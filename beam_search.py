@@ -37,7 +37,7 @@ def add_solution(solutions: dict, lay_solution: list[tuple]) -> dict:
     return solutions
 
 def prune_tree(index: list[int], lays: list[tuple]):
-    new_lays = [lay for lay in lays if lays[1] not in index]
+    new_lays = [lay for lay in lays if lay[1] not in index]
 
     return new_lays
 
@@ -48,7 +48,7 @@ def verify_solution(lays: list[tuple], solutions: dict) -> dict:
     for i in range(lays_size):
         if lays[i][0].unsorted_stacks == 0:
             solutions = add_solution(solutions, lays[i])
-            if i not in index: index.append(i)
+            if lays[i][1] not in index: index.append(lays[i][1])
 
     new_lays = prune_tree(index, lays)
 
@@ -145,6 +145,7 @@ def best_moves_v2(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply
         new_pred[k] = np.array(new_pred[k])
 
     return new_lays, new_pred
+
 
 def best_moves_v1(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply_pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
     pred_size = len(multiply_pred_lays)
@@ -293,7 +294,7 @@ if __name__ == "__main__":
 
     cases = [generate_random_layout(5, 5, 15), generate_random_layout(5, 5, 15)]
 
-    solutions = beam_search(model, cases, w= 5, threshold= 0.01)
+    solutions = beam_search(model, cases, w= 3, threshold= 0.01)
     print(solutions)
     show_results(cases, solutions)
     
