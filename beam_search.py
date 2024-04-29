@@ -152,13 +152,13 @@ def best_moves_v1(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply
 
     k = 0
     for i in range(pred_size):
-        if len(cases) == 0 or not lays[k][1] in cases:
-            cases.update({str(lays[k][1]): {'new_lays': [], 'new_pred': []}})
-        
         stack_size = multiply_pred_lays[i].shape[0]
         temp_pred = deepcopy(child_pred_lays[i])
         temp_pred = sort_indices(temp_pred.tolist(), w)
         z = 0
+        if len(cases) == 0 or not str(lays[k][1]) in cases:
+            cases.update({str(lays[k][1]): {'new_lays': [], 'new_pred': []}})
+
         for j in range(stack_size):
             if multiply_pred_lays[i][j] >= threshold and z in temp_pred:
                 cases[str(lays[k][1])]['new_lays'].append(lays[k])
@@ -187,14 +187,29 @@ def count_unsorted_elements(matrix):
     # Cuenta el número de elementos desordenados en cada fila de una matriz
     return sum(any(row[i] < row[i+1] for i in range(len(row)-1)) for row in matrix)
 
-def find_lower_bound(matrices):
-    # Encuentra la matriz con el menor número de elementos desordenados por fila
-    unsorted_counts = [count_unsorted_elements(matrix[0].stacks) for matrix in matrices]
-    least_unsorted_count = min(unsorted_counts)
-    
-    return least_unsorted_count
+def init_lower_bound_case(lays):
+    lays_size = len(lays)
+    lb = dict()
 
-def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: int, H: int):
+    for i in range(lays_size):
+        if len(lb) == 0 or not str(lays[i][1]) in lb:
+            lb.update({str(lays[i][1]): []})
+
+        lb[str(lays[i][1])].append(lays[i][0])
+    
+    return lb
+
+def find_lower_bound(lays):
+    cases = init_lower_bound_case(lays)
+    lb = []
+    
+    for case in cases:
+        unsorted_counts = [count_unsorted_elements(matrix.stacks) for matrix in cases[case]]
+        lb.append(min(unsorted_counts))
+    
+    return lb
+
+def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: list[int], H: int):
     pred_size = len(pred_lays)
     new_lays = []
     new_pred = []
@@ -210,9 +225,11 @@ def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: int, 
                 new_pred.append([])
                 flag = False
 
-            if lb + H > lay_lb:
+            if lb[int(lays[k][1])] + H > lay_lb:
                 new_lays.append(lays[k])
                 new_pred[i].append(pred_lays[i][j])
+            
+            k += 1
         
         new_pred[i] = np.array(new_pred[i])
 
@@ -234,13 +251,7 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
     if len(session_lays) == 0: return solutions
     
     session_lays, pred_lays = expanded_lays(model, session_lays)
-
-    show_lays(session_lays)
-
     session_lays, pred_lays = best_moves_v1(session_lays, pred_lays, pred_lays, w, threshold)
-
-    print('xd')
-    show_lays(session_lays)
 
     while True:
         session_lays, solutions = verify_solution(session_lays, solutions)
@@ -256,10 +267,9 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
         print('jaju')
         show_lays(session_lays)
 
-        #lb = find_lower_bound(session_lays)
-        #session_lays, pred_lays = filter_lower_bound(session_lays, pred_lays, lb, H)
-
-        show_lays(session_lays)
+        lb = find_lower_bound(session_lays)
+        print(f'lb: {lb}')
+        session_lays, pred_lays = filter_lower_bound(session_lays, pred_lays, lb, H)
 
     return solutions
 
@@ -283,7 +293,7 @@ if __name__ == "__main__":
 
     cases = [generate_random_layout(5, 5, 15), generate_random_layout(5, 5, 15)]
 
-    solutions = beam_search(model, cases, w= 10, threshold= 0.01)
+    solutions = beam_search(model, cases, w= 5, threshold= 0.01)
     print(solutions)
     show_results(cases, solutions)
     
