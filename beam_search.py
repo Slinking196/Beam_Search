@@ -159,27 +159,40 @@ def best_moves_v2(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply
 
     return new_lays, new_pred
 
-
-def best_moves_v1(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply_pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
-    pred_size = len(multiply_pred_lays)
-    cases = dict()
+def init_best_move(lays: list[tuple], child_pred_lays: list[np.array], multiply_pred_lays: list[np.array]):
+    lays_pred_size = len(multiply_pred_lays)
+    session = dict()
 
     k = 0
-    for i in range(pred_size):
-        stack_size = multiply_pred_lays[i].shape[0]
-        temp_pred = deepcopy(child_pred_lays[i])
-        temp_pred = sort_indices(temp_pred.tolist(), w)
-        z = 0
-        if len(cases) == 0 or not str(lays[k][1]) in cases:
-            cases.update({str(lays[k][1]): {'new_lays': [], 'new_pred': []}})
+    for i in range(lays_pred_size):
+        pred_size = multiply_pred_lays[i].shape[0]
 
-        for j in range(stack_size):
-            if multiply_pred_lays[i][j] >= threshold and z in temp_pred:
-                cases[str(lays[k][1])]['new_lays'].append(lays[k])
-                cases[str(lays[k][1])]['new_pred'].append(child_pred_lays[i][j])
+        for j in range(pred_size):
+            if len(session) == 0 or not str(lays[k][1]) in session:
+                session.update({str(lays[k][1]): {'lays': [], 'multiply_pred': [], 'child_pred': []}})
 
-            z += 1
+            session[str(lays[k][1])]['lays'].append(lays[k])
+            session[str(lays[k][1])]['multiply_pred'].append(multiply_pred_lays[i][j])
+            session[str(lays[k][1])]['child_pred'].append(child_pred_lays[i][j])
             k += 1
+
+    return session
+
+def best_moves_v1(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply_pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
+    session = init_best_move(lays, child_pred_lays, multiply_pred_lays)
+    cases = dict()
+
+    for problem in session:
+        pred_size = len(session[problem]['multiply_pred'])
+        temp_pred = sort_indices(deepcopy(session[problem]['multiply_pred']), w)
+
+        for i in range(pred_size):
+            if len(cases) == 0 or not problem in cases:
+                cases.update({problem: {'new_lays': [], 'new_pred': []}})
+            
+            if session[problem]['multiply_pred'][i] >= threshold and i in temp_pred:
+                cases[problem]['new_lays'].append(session[problem]['lays'][i])
+                cases[problem]['new_pred'].append(session[problem]['child_pred'][i])
 
     return get_lays_and_preds(cases)
 
@@ -304,7 +317,7 @@ if __name__ == "__main__":
 
     cases = [generate_random_layout(5, 5, 15) for _ in range(50)]
 
-    solutions = beam_search(model, cases, w= 3, threshold= 0.01)
+    solutions = beam_search(model, cases, w= 1000, threshold= 0.01)
     show_results(cases, solutions)
     
         
