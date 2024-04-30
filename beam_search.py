@@ -36,12 +36,19 @@ def add_solution(solutions: dict, lay_solution: list[tuple]) -> dict:
     
     return solutions
 
-def prune_tree(index: list[int], lays: list[tuple]):
+def prune_tree(index: list[int], lays: list[tuple], predict: list[np.array]):
     new_lays = [lay for lay in lays if lay[1] not in index]
+    new_pred = None
 
-    return new_lays
+    if not predict is None:
+        new_pred = []
+        for i in range(len(predict)):
+            if not i in index:
+                new_pred.append(predict[i])
 
-def verify_solution(lays: list[tuple], solutions: dict) -> dict:
+    return new_lays, new_pred
+
+def verify_solution(lays: list[tuple], solutions: dict, predict: list[np.array] = None) -> dict:
     lays_size = len(lays)
     index = []
 
@@ -50,8 +57,9 @@ def verify_solution(lays: list[tuple], solutions: dict) -> dict:
             solutions = add_solution(solutions, lays[i])
             if lays[i][1] not in index: index.append(lays[i][1])
 
-    new_lays = prune_tree(index, lays)
+    new_lays, new_predict = prune_tree(index, lays, predict)
 
+    if not predict is None: return new_lays, new_predict, solutions
     return new_lays, solutions
 
 def get_model_lays(lays: list[tuple]) -> list:
@@ -62,24 +70,30 @@ def get_model_lays(lays: list[tuple]) -> list:
 def expanded_lays(model: Model, lays: list[tuple]):
     lays_size = len(lays)
     child_lays = []
+    new_pred_lays = []
 
     model_lays = get_model_lays(lays)
     pred_lays = model.predict(model_lays, verbose= False)
+    K.clear_session()
 
     for k in range(lays_size):
         stack_size = len(lays[k][0].stacks)
+        new_pred_lays.append([])
 
+        z = 0
         for i in range(stack_size):
             for j in range(stack_size):
                 if i == j: continue
 
                 new_lay = deepcopy(lays[k][0])
-                new_lay.move((i, j))
+                if new_lay.move((i, j)) is None: continue
                 child_lays.append((new_lay, lays[k][1]))
-    
-    K.clear_session()
+                new_pred_lays[k].append(pred_lays[k][z])
+                z += 1
+        
+        new_pred_lays[k] = np.array(new_pred_lays[k])
 
-    return child_lays, pred_lays
+    return child_lays, new_pred_lays
 
 def get_dimensions(lst: list) -> list:
     dimensions = []
@@ -98,11 +112,10 @@ def get_dimensions(lst: list) -> list:
     return dimensions 
 
 def get_lays_and_preds(cases):
-    cases_size = len(cases)
     new_lays = []
     new_pred = []
 
-    for i in range(cases_size):
+    for i in cases:
         lay_case = cases[str(i)]
 
         for lay in lay_case['new_lays']:
@@ -167,7 +180,7 @@ def best_moves_v1(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply
 
             z += 1
             k += 1
-    
+
     return get_lays_and_preds(cases)
 
 def multiply_predictions(pred_lays: list[np.ndarray], pred_child_lays: list[np.ndarray]) -> list[np.ndarray]:
@@ -202,15 +215,15 @@ def init_lower_bound_case(lays):
 
 def find_lower_bound(lays):
     cases = init_lower_bound_case(lays)
-    lb = []
+    lb = dict()
     
     for case in cases:
         unsorted_counts = [count_unsorted_elements(matrix.stacks) for matrix in cases[case]]
-        lb.append(min(unsorted_counts))
+        lb[case] = min(unsorted_counts)
     
     return lb
 
-def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: list[int], H: int):
+def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: dict, H: int):
     pred_size = len(pred_lays)
     new_lays = []
     new_pred = []
@@ -226,7 +239,7 @@ def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: list[
                 new_pred.append([])
                 flag = False
 
-            if lb[int(lays[k][1])] + H > lay_lb:
+            if lb[str(lays[k][1])] + H > lay_lb:
                 new_lays.append(lays[k])
                 new_pred[i].append(pred_lays[i][j])
             
@@ -255,7 +268,7 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
     session_lays, pred_lays = best_moves_v1(session_lays, pred_lays, pred_lays, w, threshold)
 
     while True:
-        session_lays, solutions = verify_solution(session_lays, solutions)
+        session_lays, pred_lays, solutions = verify_solution(session_lays, solutions, pred_lays)
         if len(session_lays) == 0: break
 
         print(get_dimensions(session_lays), get_dimensions(pred_lays))
@@ -265,11 +278,8 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
         multiply_pred = multiply_predictions(pred_lays, pred_child_lays)
         session_lays, pred_lays = best_moves_v1(child_lays, pred_child_lays, multiply_pred, w, threshold)
 
-        print('jaju')
-        show_lays(session_lays)
-
         lb = find_lower_bound(session_lays)
-        print(f'lb: {lb}')
+        print(f'lb: {lb.values()}')
         session_lays, pred_lays = filter_lower_bound(session_lays, pred_lays, lb, H)
 
     return solutions
@@ -285,17 +295,16 @@ def show_results(cases: list[Layout], solutions: dict):
         case_solution_size = len(case_solution)
 
         for j in range(case_solution_size):
-            print(f'    solution {j}:')
-            print(f'        {case_solution[j].stacks}')
+            print(f'    solution {j}, steps {case_solution[j].steps}:')
+            print(f'        {case_solution[j].stacks}, ')
 
 
 if __name__ == "__main__":
     model = load_model('./Models/model_5x5.keras')
 
-    cases = [generate_random_layout(5, 5, 15), generate_random_layout(5, 5, 15)]
+    cases = [generate_random_layout(5, 5, 15) for _ in range(50)]
 
     solutions = beam_search(model, cases, w= 3, threshold= 0.01)
-    print(solutions)
     show_results(cases, solutions)
     
         
