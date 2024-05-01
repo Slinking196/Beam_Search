@@ -40,15 +40,34 @@ def prune_tree(index: list[int], lays: list[tuple], predict: list[np.array]):
     new_lays = [lay for lay in lays if lay[1] not in index]
     new_pred = None
 
+    print(f'indices: {index}')
     if not predict is None:
         new_pred = []
-        for i in range(len(predict)):
-            if not i in index:
-                new_pred.append(predict[i])
+        for case in predict:
+            if not int(case) in index:
+                new_pred.append(np.array(predict[case]))
 
     return new_lays, new_pred
 
+def init_pred_with_index(lays, pred):
+    pred_size = len(pred)
+    new_pred = dict()
+
+    k = 0
+    for i in range(pred_size):
+        stack_size = pred[i].shape[0]
+
+        for j in range(stack_size):
+            if len(new_pred) == 0 or not str(lays[k][1]) in new_pred:
+                new_pred.update({str(lays[k][1]): []})
+            
+            new_pred[str(lays[k][1])].append(pred[i][j])
+            k += 1
+
+    return new_pred
+
 def verify_solution(lays: list[tuple], solutions: dict, predict: list[np.array] = None) -> dict:
+    if not predict is None: predict = init_pred_with_index(lays, predict)
     lays_size = len(lays)
     index = []
 
@@ -131,33 +150,6 @@ def sort_indices(lst, n):
     
     # Devuelve los n primeros índices
     return sorted_indices[:n]
-
-def best_moves_v2(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply_pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
-    pred_size = len(multiply_pred_lays)
-    new_lays = []
-    new_pred = []
-
-    cont = 0
-    for k in range(pred_size):
-        pred_size = multiply_pred_lays[k].shape[0]
-        temp_w = 0
-        
-        flag = True
-        for i in range(pred_size):
-            if flag: 
-                new_pred.append([])
-                flag = False
-
-            if multiply_pred_lays[k][i] >= threshold and temp_w < w:
-                new_lays.append(lays[cont])
-                new_pred[k].append(child_pred_lays[k][i])
-                temp_w += 1
-
-            cont += 1
-
-        new_pred[k] = np.array(new_pred[k])
-
-    return new_lays, new_pred
 
 def init_best_move(lays: list[tuple], child_pred_lays: list[np.array], multiply_pred_lays: list[np.array]):
     lays_pred_size = len(multiply_pred_lays)
@@ -288,6 +280,7 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
         print(len(solutions))
 
         child_lays, pred_child_lays = expanded_lays(model, session_lays)
+        print('popo',get_dimensions(session_lays), get_dimensions(pred_lays), get_dimensions(pred_child_lays))
         multiply_pred = multiply_predictions(pred_lays, pred_child_lays)
         session_lays, pred_lays = best_moves_v1(child_lays, pred_child_lays, multiply_pred, w, threshold)
 
@@ -315,7 +308,7 @@ def show_results(cases: list[Layout], solutions: dict):
 if __name__ == "__main__":
     model = load_model('./Models/model_5x5.keras')
 
-    cases = [generate_random_layout(5, 5, 15) for _ in range(50)]
+    cases = [generate_random_layout(5, 5, 15) for _ in range(10)]
 
     solutions = beam_search(model, cases, w= 1000, threshold= 0.01)
     show_results(cases, solutions)
