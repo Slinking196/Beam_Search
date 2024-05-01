@@ -4,6 +4,7 @@ from keras import backend as K
 from CPMP.cpmp_ml import generate_random_layout, Layout
 from CPMP_Model.Model_CPMP import load_model
 from copy import deepcopy
+import time
 
 def get_ann_state(layout: Layout) -> np.ndarray:
     S=len(layout.stacks) # Cantidad de stacks
@@ -26,9 +27,18 @@ def init_session(lays: list[Layout]) -> list[tuple]:
 
     return new_lays
 
+def search_solution(state, solutions):
+    solutions_size = len(solutions)
+
+    for i in range(solutions_size):
+        if state == solutions[i]: return True
+
+    return False
+
 def add_solution(solutions: dict, lay_solution: list[tuple]) -> dict:
     solutions_size = len(solutions)
 
+    if solutions_size != 0 and str(lay_solution[1]) in solutions and search_solution(lay_solution[0], solutions[str(lay_solution[1])]): return solutions
     if solutions_size == 0 or not str(lay_solution[1]) in solutions:
         solutions.update({str(lay_solution[1]): [lay_solution[0]]})
     else:
@@ -263,6 +273,7 @@ def show_lays(lays):
 def beam_search(model: Model, lays: list[Layout] = None, H: int = 5, 
                 w: int = 3 , threshold: float = 0.01) -> list:
     
+    start = time.time()
     session_lays = init_session(lays)
     solutions = dict()
     
@@ -287,6 +298,10 @@ def beam_search(model: Model, lays: list[Layout] = None, H: int = 5,
         lb = find_lower_bound(session_lays)
         print(f'lb: {lb.values()}')
         session_lays, pred_lays = filter_lower_bound(session_lays, pred_lays, lb, H)
+
+    end = time.time()
+
+    print(f'tiempo de ejecución: {round(end - start, 3)}')
 
     return solutions
 
