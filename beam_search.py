@@ -4,6 +4,7 @@ from keras import backend as K
 from CPMP.cpmp_ml import generate_random_layout, Layout
 from CPMP_Model.Model_CPMP import load_model
 from copy import deepcopy
+import time
 
 def get_ann_state(layout: Layout) -> np.ndarray:
     S=len(layout.stacks) # Cantidad de stacks
@@ -17,261 +18,259 @@ def get_ann_state(layout: Layout) -> np.ndarray:
     
     return np.stack(b)
 
-def init_session(lays: list[Layout]) -> list[tuple]:
-    lays_size = len(lays)
-    new_lays = []
+class BeemSearch():
+    def __init__(self, model: Model, H: int, level_nodes: int, threshold: float) -> None:
+        self.__model = model
+        self.__H = H
+        self.__level_nodes = level_nodes
+        self.__threshold = threshold
+        self.__session_lays_size = 0
+        self.__init_states = None
+        self.__solutions = dict()
 
-    for i in range(lays_size):
-        new_lays.append((lays[i], i))
+    def __init_session_lays__(self, lays: np.ndarray[Layout]) -> dict:
+        lays_size = lays.shape[0]
+        self.__session_lays_size = lays_size
+        session_lays = dict()
 
-    return new_lays
+        for i in range(lays_size):
+            session_lays.update({str(i): [lays[i]]})
+        
+        return session_lays
 
-def add_solution(solutions: dict, lay_solution: list[tuple]) -> dict:
-    solutions_size = len(solutions)
+    def __add_solution__(self, state: Layout, case: str) -> None:
+        if case not in self.__solutions:
+            self.__solutions.update({case: [state]})
+        elif case in self.__solutions:
+            self.__solutions[case].append(state)
 
-    if solutions_size == 0 or not str(lay_solution[1]) in solutions:
-        solutions.update({str(lay_solution[1]): [lay_solution[0]]})
-    else:
-        solutions[str(lay_solution[1])].append(lay_solution[0])
+    def __prune_tree__(self, session_lays: dict, costs: np.ndarray, pred_lays: dict = None) -> dict:
+        temp_session = deepcopy(session_lays)
+        pred_lays = deepcopy(pred_lays)
+
+        for case in session_lays:
+            if costs[int(case)] != -1: 
+                temp_session.pop(case)
+                if pred_lays is not None and case in pred_lays: pred_lays.pop(case)
+
+        return temp_session, pred_lays
+
+    def __verify_solutions__(self, session_lays: dict, costs: np.ndarray, step: int, pred_lays: dict = None) -> np.ndarray:
+        for case in session_lays:
+            states = session_lays[case]
+            states_size = len(states)
+
+            for i in range(states_size):
+                if states[i].unsorted_stacks == 0:
+                    self.__add_solution__(states[i], case)
+                    costs[int(case)] = step
+        
+        session_lays, pred_lays = self.__prune_tree__(session_lays, costs, pred_lays)
+
+        if pred_lays is not None: return session_lays, pred_lays
+        return session_lays
     
-    return solutions
+    def __get_model_lays__(self, session_lays: dict) -> np.ndarray:
+        temp_session = deepcopy(session_lays)
+        model_lays = []
 
-def prune_tree(index: list[int], lays: list[tuple]):
-    new_lays = [lay for lay in lays if lays[1] not in index]
+        for case in temp_session:
+            states = temp_session[case]
+            states_size = len(states)
 
-    return new_lays
-
-def verify_solution(lays: list[tuple], solutions: dict) -> dict:
-    lays_size = len(lays)
-    index = []
-
-    for i in range(lays_size):
-        if lays[i][0].unsorted_stacks == 0:
-            solutions = add_solution(solutions, lays[i])
-            if i not in index: index.append(i)
-
-    new_lays = prune_tree(index, lays)
-
-    return new_lays, solutions
-
-def get_model_lays(lays: list[tuple]) -> list:
-    model_lays = [get_ann_state(lay[0]) for lay in lays]
-
-    return np.stack(model_lays)
-
-def expanded_lays(model: Model, lays: list[tuple]):
-    lays_size = len(lays)
-    child_lays = []
-
-    model_lays = get_model_lays(lays)
-    pred_lays = model.predict(model_lays, verbose= False)
-
-    for k in range(lays_size):
-        stack_size = len(lays[k][0].stacks)
-
-        for i in range(stack_size):
-            for j in range(stack_size):
+            for i in range(states_size):
+                model_lays.append(get_ann_state(states[i]))
+        
+        return np.stack(model_lays)
+    
+    def __get_all_child_lays__(self, state: Layout, session_lays: dict, pred_lays: np.ndarray, case: str) -> tuple:
+        S = len(state.stacks)
+        new_pred_lay = []
+        
+        k = 0
+        for i in range(S):
+            for j in range(S):
                 if i == j: continue
+                temp = deepcopy(state)
+                if temp.move((i, j)) is None: continue
+                session_lays[case].append(temp)
+                new_pred_lay.append(pred_lays[k])
+                k += 1
 
-                new_lay = deepcopy(lays[k][0])
-                new_lay.move((i, j))
-                child_lays.append((new_lay, lays[k][1]))
-    
-    K.clear_session()
-
-    return child_lays, pred_lays
-
-def get_dimensions(lst: list) -> list:
-    dimensions = []
-
-    while isinstance(lst, list) or isinstance(lst, np.ndarray):  # Mientras el elemento sea una lista
-        if isinstance(lst, list): dimensions.append(len(lst))
-        elif isinstance(lst, np.ndarray):  # Agregar la longitud de la lista actual a las dimensiones
-            lst = lst.tolist()
-            dimensions.append(len(lst))
-
-        if len(lst) == 0:
-            # Si la lista está vacía, detener el bucle
-            break
-        lst = lst[0]  # Continuar con el primer elemento para revisar más niveles de anidamiento
-    
-    return dimensions 
-
-def get_lays_and_preds(cases):
-    cases_size = len(cases)
-    new_lays = []
-    new_pred = []
-
-    for i in range(cases_size):
-        lay_case = cases[str(i)]
-
-        for lay in lay_case['new_lays']:
-            new_lays.append(lay)
-
-        new_pred.append(np.array(lay_case['new_pred']))
-
-    return new_lays, new_pred 
-
-def sort_indices(lst, n):
-    # Crea una lista de índices ordenados de forma descendente basándose en los valores de la lista
-    sorted_indices = sorted(range(len(lst)), key=lambda x: lst[x], reverse=True)
-    
-    # Devuelve los n primeros índices
-    return sorted_indices[:n]
-
-def best_moves_v2(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply_pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
-    pred_size = len(multiply_pred_lays)
-    new_lays = []
-    new_pred = []
-
-    cont = 0
-    for k in range(pred_size):
-        pred_size = multiply_pred_lays[k].shape[0]
-        temp_w = 0
+        new_pred_lay = np.array(new_pred_lay)
         
-        flag = True
-        for i in range(pred_size):
-            if flag: 
-                new_pred.append([])
-                flag = False
+        return session_lays, new_pred_lay
 
-            if multiply_pred_lays[k][i] >= threshold and temp_w < w:
-                new_lays.append(lays[cont])
-                new_pred[k].append(child_pred_lays[k][i])
-                temp_w += 1
+    def __expand_lays__(self, session_lays: dict) -> tuple:
+        child_session_lays = dict()
+        child_session_pred = dict()
+        model_lays = self.__get_model_lays__(session_lays)
 
-            cont += 1
-
-        new_pred[k] = np.array(new_pred[k])
-
-    return new_lays, new_pred
-
-def best_moves_v1(lays: list[tuple], child_pred_lays: list[np.ndarray], multiply_pred_lays: list[np.ndarray], w: int, threshold: int = 0.01) -> tuple:
-    pred_size = len(multiply_pred_lays)
-    cases = dict()
-
-    k = 0
-    for i in range(pred_size):
-        stack_size = multiply_pred_lays[i].shape[0]
-        temp_pred = deepcopy(child_pred_lays[i])
-        temp_pred = sort_indices(temp_pred.tolist(), w)
-        z = 0
-        if len(cases) == 0 or not str(lays[k][1]) in cases:
-            cases.update({str(lays[k][1]): {'new_lays': [], 'new_pred': []}})
-
-        for j in range(stack_size):
-            if multiply_pred_lays[i][j] >= threshold and z in temp_pred:
-                cases[str(lays[k][1])]['new_lays'].append(lays[k])
-                cases[str(lays[k][1])]['new_pred'].append(child_pred_lays[i][j])
-
-            z += 1
-            k += 1
-    
-    return get_lays_and_preds(cases)
-
-def multiply_predictions(pred_lays: list[np.ndarray], pred_child_lays: list[np.ndarray]) -> list[np.ndarray]:
-    pred_lays_size = len(pred_lays)
-    multiply_pred = []
-
-    j = 0
-    for k in range(pred_lays_size):
-        stack_size = pred_lays[k].shape[0]
+        pred_lays = self.__model.predict(model_lays, verbose= False)
+        K.clear_session()
         
-        for i in range(stack_size):
-            multiply_pred.append(pred_child_lays[j] * pred_lays[k][i])
-            j += 1
+        k = 0
+        for case in session_lays:
+            child_session_lays.update({case: []})
+            child_session_pred.update({case: []})
+
+            states = session_lays[case]
+            states_size = len(states)
+
+            for i in range(states_size):
+                child_session_lays, new_pred_lay = self.__get_all_child_lays__(states[i], child_session_lays, pred_lays[k], case)
+                child_session_pred[case].append(new_pred_lay)
+                k += 1
+
+        return child_session_lays, child_session_pred
     
-    return multiply_pred
+    def __sort_indices__(self, lst: list):
+        lst = np.concatenate(lst)
+        sorted_indices = sorted(range(len(lst)), key=lambda x: lst[x], reverse= True)
 
-def count_unsorted_elements(matrix):
-    # Cuenta el número de elementos desordenados en cada fila de una matriz
-    return sum(any(row[i] < row[i+1] for i in range(len(row)-1)) for row in matrix)
+        return sorted_indices[: self.__level_nodes]
 
-def init_lower_bound_case(lays):
-    lays_size = len(lays)
-    lb = dict()
+    def __best_moves__(self, session_lays: dict, session_pred: dict, multiplication_pred: dict) -> dict:
+        new_session_lays = dict()
+        new_session_pred = dict()
 
-    for i in range(lays_size):
-        if len(lb) == 0 or not str(lays[i][1]) in lb:
-            lb.update({str(lays[i][1]): []})
+        for case in session_lays:
+            new_session_lays.update({case: []})
+            new_session_pred.update({case: []})
 
-        lb[str(lays[i][1])].append(lays[i][0])
-    
-    return lb
+            states, pred_lays = session_lays[case], np.concatenate(session_pred[case])
+            states_size = len(states)
+            temp_pred = self.__sort_indices__(multiplication_pred[case])
 
-def find_lower_bound(lays):
-    cases = init_lower_bound_case(lays)
-    lb = []
-    
-    for case in cases:
-        unsorted_counts = [count_unsorted_elements(matrix.stacks) for matrix in cases[case]]
-        lb.append(min(unsorted_counts))
-    
-    return lb
+            new_pred = []
+            for i in range(states_size):
+                if pred_lays[i] >= self.__threshold and i in temp_pred:
+                    new_session_lays[case].append(states[i])
+                    new_pred.append(pred_lays[i])
 
-def filter_lower_bound(lays: list[tuple], pred_lays: list[np.ndarray], lb: list[int], H: int):
-    pred_size = len(pred_lays)
-    new_lays = []
-    new_pred = []
-
-    k = 0
-    for i in range(pred_size):
-        lay_lb = count_unsorted_elements(lays[k][0].stacks)
-        stack_size = pred_lays[i].shape[0]
-        flag = True
-
-        for j in range(stack_size):
-            if flag:
-                new_pred.append([])
-                flag = False
-
-            if lb[int(lays[k][1])] + H > lay_lb:
-                new_lays.append(lays[k])
-                new_pred[i].append(pred_lays[i][j])
+            if len(new_pred) != 0: new_session_pred[case].append(np.array(new_pred))
             
-            k += 1
+        return new_session_lays, new_session_pred
+
+    def __multiply_predictions__(self, session_pred_lays: dict, session_pred_child_lays: dict) -> np.ndarray:
+        multiply_pred = dict()
+
+        for case in session_pred_lays:
+            multiply_pred.update({case: []})
+            
+            pred_lays = np.concatenate(session_pred_lays[case])
+            child_pred_lays = session_pred_child_lays[case]
+
+            for i in range(pred_lays.shape[0]):
+                multiply_pred[case].append(child_pred_lays[i] * pred_lays[i])
+
+        return multiply_pred
+    
+    def __count_unsorted_elements__(self, matrix: list) -> int:
+        return sum(any(row[i] < row[i+1] for i in range(len(row)-1)) for row in matrix)
+
+    def __find_lower_bound__(self, session_lays: dict) -> dict:
+        lb = dict()
+
+        for case in session_lays:
+            unsorted_counts = [self.__count_unsorted_elements__(matrix.stacks) for matrix in session_lays[case]]
+            lb.update({case: min(unsorted_counts)})
+
+        return lb
+
+    def __filter_lower_bound__(self, session_lays: dict, session_pred_lays: dict, lb: dict) -> tuple:
+        new_session_lays = dict()
+        new_session_pred = dict()
+
+        for case in session_lays:
+            new_session_lays.update({case: []})
+            new_session_pred.update({case: []})
+
+            states = session_lays[case]
+            pred_lays = np.concatenate(session_pred_lays[case])
+            states_size = len(states)
+
+            new_pred = []
+            for i in range(states_size):
+                lay_lb = self.__count_unsorted_elements__(states[i].stacks)
+
+                if lb[case] + self.__H >= lay_lb:
+                    new_session_lays[case].append(states[i])
+                    new_pred.append(pred_lays[i])
+            
+            new_session_pred[case].append(np.array(new_pred))
         
-        new_pred[i] = np.array(new_pred[i])
+        return new_session_lays, new_session_pred
 
-    return new_lays, new_pred
+    def __verify_states_whitout_solution__(self, lays: np.ndarray[np.ndarray]) -> None:
+        pass
 
-def show_lays(lays):
-    lays_size = len(lays)
+    def __show_session_lays__(self, session_lays: dict, session_pred_lays: dict):
+        for case in session_lays:
+            states = session_lays[case]
+            pred_lays = np.concatenate(session_pred_lays[case])
+            states_size = len(states)
 
-    for i in range(lays_size):
-        print(f'case {lays[i][1]}: {lays[i][0].stacks}')
+            print(f"{case =}")
+            for i in range(states_size):
+                print(f'   state: {states[i].stacks}')
+                print(f'   prob: {pred_lays[i]}')
 
-def beam_search(model: Model, lays: list[Layout] = None, H: int = 5, 
-                w: int = 3 , threshold: float = 0.01) -> list:
+
+    def solve(self, lays: np.ndarray[Layout], max_steps: int) -> np.ndarray:
+        start = time.time()
+        steps = 0
+        costs = np.full(lays.shape[0], -1)
+        session_lays = self.__init_session_lays__(lays)
+        
+        session_lays = self.__verify_solutions__(session_lays, costs, steps)
+        if len(session_lays) == 0: return costs
+
+        session_lays, pred_lays = self.__expand_lays__(session_lays)
+        session_lays, pred_lays = self.__best_moves__(session_lays, pred_lays, pred_lays)
+
+        while True:
+            steps += 1
+            session_lays, pred_lays = self.__verify_solutions__(session_lays, costs, steps, pred_lays)
+            if len(session_lays) == 0 or steps >= max_steps: break
+
+            child_session_lays, pred_child_lays = self.__expand_lays__(session_lays)
+            multiply_pred = self.__multiply_predictions__(pred_lays, pred_child_lays)
+            session_lays, pred_lays = self.__best_moves__(child_session_lays, pred_child_lays, multiply_pred)
+
+            lb = self.__find_lower_bound__(session_lays)
+            session_lays, pred_lays = self.__filter_lower_bound__(session_lays, pred_lays, lb)
+            print(f'Lower bound: {lb.values()}')
+
+        end = time.time()
+
+        print(f'\nExecution time: {round((end - start) / 60, 3)} minutes')
+
+        return costs
+
+    def get_init_states(self) -> np.ndarray:
+        if self.__init_states is None: 
+            print(f"No hay estados iniciales")
+            return None
+        
+        return self.__init_states
     
-    session_lays = init_session(lays)
-    solutions = dict()
+    def get_solutions(self) -> list:
+        if self.__solutions is None: 
+            print(f"No hay resultados")
+            return None
     
-    session_lays, solutions = verify_solution(session_lays, solutions)
-    if len(session_lays) == 0: return solutions
+        return self.__solutions
+
+    def set_model(self, new_model: Model, new_H) -> None:
+        self.__model = new_model
+        self.__model = new_H
+
+    def set_level_nodes(self, new_level_nodes: int) -> None:
+        self.__level_nodes = new_level_nodes
     
-    session_lays, pred_lays = expanded_lays(model, session_lays)
-    session_lays, pred_lays = best_moves_v1(session_lays, pred_lays, pred_lays, w, threshold)
-
-    while True:
-        session_lays, solutions = verify_solution(session_lays, solutions)
-        if len(session_lays) == 0: break
-
-        print(get_dimensions(session_lays), get_dimensions(pred_lays))
-        print(len(solutions))
-
-        child_lays, pred_child_lays = expanded_lays(model, session_lays)
-        multiply_pred = multiply_predictions(pred_lays, pred_child_lays)
-        session_lays, pred_lays = best_moves_v1(child_lays, pred_child_lays, multiply_pred, w, threshold)
-
-        print('jaju')
-        show_lays(session_lays)
-
-        lb = find_lower_bound(session_lays)
-        print(f'lb: {lb}')
-        session_lays, pred_lays = filter_lower_bound(session_lays, pred_lays, lb, H)
-
-    return solutions
+    def set_threshold(self, new_threshold: float) -> None:
+        self.__threshold = new_threshold
 
 def show_results(cases: list[Layout], solutions: dict):
     cases_size = len(cases)
@@ -291,10 +290,10 @@ def show_results(cases: list[Layout], solutions: dict):
 if __name__ == "__main__":
     model = load_model('./Models/model_5x5.keras')
 
-    cases = [generate_random_layout(5, 5, 15), generate_random_layout(5, 5, 15)]
+    cases = [generate_random_layout(5, 5, 15) for _ in range(1000)]
+    optimizer = BeemSearch(model, 5, 15, 0.0001)
 
-    solutions = beam_search(model, cases, w= 5, threshold= 0.01)
+    solutions = optimizer.solve(np.array(cases, dtype= object), 30)
     print(solutions)
-    show_results(cases, solutions)
     
         
